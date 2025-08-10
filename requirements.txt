@@ -1,0 +1,8 @@
+pandas>=1.4.0
+numpy>=1.22.0
+matplotlib>=3.5.0
+yfinance>=0.1.70
+python-binance>=1.0.0
+ccxt>=2.6.1
+backtrader>=1.9.76.123
+ta-lib>=0.4.24
