@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 
-def fetch_live_data(symbol='BTC/USDT', timeframe='1h', limit=500):
+def fetch_live_data(symbol='BTC/USDT', timeframe='15m', limit=500):
     """Fetches live OHLCV data from Binance"""
     exchange = ccxt.binance({
         'enableRateLimit': True,
