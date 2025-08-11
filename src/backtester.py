@@ -1,62 +1,53 @@
-import backtrader as bt
 import pandas as pd
-from datetime import datetime
+import numpy as np
+from typing import Dict, List
 
-class FinalStrategy(bt.Strategy):
-    params = (
-        ('rsi_period', 14),
-        ('rsi_high', 70),
-        ('rsi_low', 30),
-    )
+class CryptoBacktester:
+    def __init__(self, data: pd.DataFrame, initial_balance: float = 10000, fee: float = 0.001):
+        self.data = data  # DataFrame with OHLCV columns
+        self.initial_balance = initial_balance
+        self.fee = fee  # Exchange taker fee (e.g., 0.1%)
+        self.trades = []
+        self.signals = []
 
-    def __init__(self):
-        self.rsi = bt.indicators.RSI(self.data.close, period=self.p.rsi_period)
+    def calculate_indicators(self):
+        """Compute technical indicators (e.g., SMA, RSI)."""
+        self.data['SMA_50'] = self.data['close'].rolling(50).mean()
+        self.data['SMA_200'] = self.data['close'].rolling(200).mean()
 
-    def next(self):
-        if not self.position:
-            if self.rsi < self.p.rsi_low:
-                self.buy(size=self.broker.getcash() / self.data.close[0] * 0.95)
-        else:
-            if self.rsi > self.p.rsi_high:
-                self.sell(size=self.position.size)
-
-def run_backtest(data_path):
-    try:
-        # 1. Load and convert data
-        df = pd.read_csv(data_path)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])  # Convert to datetime
-        
-        # 2. Create Data Feed with proper datetime handling
-        data = bt.feeds.PandasData(
-            dataname=df,
-            datetime=0,  # Use already converted datetime
-            open=1,
-            high=2,
-            low=3,
-            close=4,
-            volume=5,
-            openinterest=-1
+    def generate_signals(self):
+        """Define strategy logic (long/short/flat)."""
+        self.data['signal'] = np.where(
+            self.data['SMA_50'] > self.data['SMA_200'], 1, 0  # Simple crossover
         )
-        
-        # 3. Run backtest
-        cerebro = bt.Cerebro()
-        cerebro.adddata(data)
-        cerebro.addstrategy(FinalStrategy)
-        cerebro.broker.setcash(10000.0)
-        
-        print('Starting Portfolio Value: %.2f' % cerebro.broker.getvalue())
-        cerebro.run()
-        print('Final Portfolio Value: %.2f' % cerebro.broker.getvalue())
-        
-        # Optional plotting
-        cerebro.plot(style='candlestick')
-        
-    except Exception as e:
-        print(f"\n❌ Critical Error: {str(e)}")
-        print("\nDebug Info:")
-        print(f"First timestamp type: {type(df.iloc[0,0])}")
-        print(f"First 5 timestamps: {df['timestamp'].head().tolist()}")
 
+    def run_backtest(self):
+        """Simulate trades based on signals."""
+        position = 0
+        balance = self.initial_balance
+        
+        for i, row in self.data.iterrows():
+            if row['signal'] == 1 and position <= 0:  # Buy signal
+                units = balance / row['close'] * (1 - self.fee)
+                position = units
+                balance = 0
+                self.trades.append({'time': i, 'action': 'BUY', 'price': row['close']})
+            elif row['signal'] == 0 and position > 0:  # Sell signal
+                balance = position * row['close'] * (1 - self.fee)
+                position = 0
+                self.trades.append({'time': i, 'action': 'SELL', 'price': row['close']})
+
+    def evaluate_performance(self) -> Dict[str, float]:
+        """Calculate key metrics."""
+        # Implement Sharpe ratio, drawdown, etc.
+        return {"return_pct": (self.balance - self.initial_balance) / self.initial_balance * 100}
+
+# Example Usage
 if __name__ == "__main__":
-    print("\n🚀 Running Final Backtest...")
-    run_backtest("data/BTC-USDT_1d.csv")
+    data = pd.read_csv('historical_data.csv', parse_dates=['timestamp'])
+    backtester = CryptoBacktester(data)
+    backtester.calculate_indicators()
+    backtester.generate_signals()
+    backtester.run_backtest()
+    results = backtester.evaluate_performance()
+    print(results)
