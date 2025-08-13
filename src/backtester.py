@@ -1,119 +1,160 @@
-import ccxt
+# backtester.py
 import pandas as pd
-import matplotlib.pyplot as plt
-import os
+import numpy as np
+from typing import Dict, List, Tuple, Optional, Callable
+import logging
+from dataclasses import dataclass
 
-def fetch_live_data(symbol='BTC/USDT', timeframe='15m', limit=500):
-    """Fetches live OHLCV data from Binance"""
-    exchange = ccxt.binance({
-        'enableRateLimit': True,
-        'options': {
-            'adjustForTimeDifference': True
-        }
-    })
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    return df.set_index('timestamp')
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-class CryptoBacktester:
-    def __init__(self, data: pd.DataFrame, initial_balance: float = 10000, fee: float = 0.001):
+@dataclass
+class Trade:
+    """Class to track individual trades"""
+    entry_date: str
+    entry_price: float
+    exit_date: Optional[str] = None
+    exit_price: Optional[float] = None
+    position_size: float = 0.0
+    fees: float = 0.0
+    pnl: Optional[float] = None
+    pnl_pct: Optional[float] = None
+
+class Backtester:
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        strategy: Callable[[pd.DataFrame], pd.Series],
+        initial_capital: float = 10000.0,
+        fee_rate: float = 0.001,
+        price_column: str = "close",
+        stop_loss: Optional[float] = 0.05,  # 5%
+        take_profit: Optional[float] = 0.10,  # 10%
+        position_size: float = 0.1  # 10% of capital
+    ) -> None:
+        """
+        Initialize backtester with:
+        - data: DataFrame with price data
+        - strategy: Function that generates signals
+        - fee_rate: Transaction fee (0.1% default)
+        - stop_loss/take_profit: Risk management
+        - position_size: % of capital per trade
+        """
         self.data = data
-        self.initial_balance = initial_balance
-        self.fee = fee
-        self.balance = initial_balance
-        self.position = 0
-        self.trades = []
-        
-    def calculate_indicators(self):
-        self.data['SMA_50'] = self.data['close'].rolling(50).mean()
-        self.data['SMA_200'] = self.data['close'].rolling(200).mean()
-        
-    def generate_signals(self):
-        self.data['signal'] = 0
-        self.data.loc[self.data['SMA_50'] > self.data['SMA_200'], 'signal'] = 1
-        self.data.loc[self.data['SMA_50'] <= self.data['SMA_200'], 'signal'] = 0
-        
-    def run_backtest(self):
-        self.calculate_indicators()
-        self.generate_signals()
-        
-        for i, row in self.data.iterrows():
-            if row['signal'] == 1 and self.position <= 0:
-                self.position = self.balance / row['close'] * (1 - self.fee)
-                self.balance = 0
-                self.trades.append({'time': i, 'action': 'BUY', 'price': row['close']})
-            elif row['signal'] == 0 and self.position > 0:
-                self.balance = self.position * row['close'] * (1 - self.fee)
-                self.position = 0
-                self.trades.append({'time': i, 'action': 'SELL', 'price': row['close']})
-    
-    def evaluate_performance(self):
-        if self.position > 0:
-            self.balance = self.position * self.data.iloc[-1]['close'] * (1 - self.fee)
-        
+        self.strategy = strategy
+        self.initial_capital = initial_capital
+        self.fee_rate = fee_rate
+        self.price_column = price_column
+        self.stop_loss = stop_loss
+        self.take_profit = take_profit
+        self.position_size = position_size
+        self._validate_inputs()
+
+    def _validate_inputs(self) -> None:
+        """Validate all inputs"""
+        if not isinstance(self.data, pd.DataFrame):
+            raise ValueError("Data must be a pandas DataFrame")
+        if self.price_column not in self.data.columns:
+            raise ValueError(f"Price column '{self.price_column}' not found")
+        if not 0 < self.position_size <= 1:
+            raise ValueError("Position size must be between 0 and 1")
+
+    def run_backtest(self) -> Dict[str, any]:
+        """
+        Run backtest and return:
+        - performance metrics
+        - list of all trades
+        - equity curve
+        """
+        signals = self.strategy(self.data)
+        portfolio = self.initial_capital
+        position = 0.0
+        active_trade = None
+        trades = []
+        equity_curve = []
+
+        for i, (date, row) in enumerate(self.data.iterrows()):
+            price = row[self.price_column]
+            
+            # Check for stop loss/take profit
+            if active_trade and position > 0:
+                current_pnl = (price - active_trade.entry_price) / active_trade.entry_price
+                if self.stop_loss and current_pnl <= -self.stop_loss:
+                    signals.iloc[i] = -1  # Force exit
+                elif self.take_profit and current_pnl >= self.take_profit:
+                    signals.iloc[i] = -1
+
+            # Buy signal
+            if signals.iloc[i] == 1 and position == 0:
+                trade_size = portfolio * self.position_size
+                fee = trade_size * self.fee_rate
+                active_trade = Trade(
+                    entry_date=date,
+                    entry_price=price,
+                    position_size=trade_size,
+                    fees=fee
+                )
+                portfolio -= trade_size + fee
+                position = trade_size / price
+
+            # Sell signal
+            elif signals.iloc[i] == -1 and position > 0:
+                fee = position * price * self.fee_rate
+                pnl = position * (price - active_trade.entry_price) - active_trade.fees - fee
+                pnl_pct = (pnl / active_trade.position_size) * 100
+
+                active_trade.exit_date = date
+                active_trade.exit_price = price
+                active_trade.pnl = pnl
+                active_trade.pnl_pct = pnl_pct
+                active_trade.fees += fee
+
+                trades.append(active_trade)
+                portfolio += position * price - fee
+                position = 0.0
+                active_trade = None
+
+            equity_curve.append(portfolio)
+
         return {
-            'return_pct': (self.balance - self.initial_balance) / self.initial_balance * 100,
-            'num_trades': len(self.trades),
-            'final_balance': self.balance
+            'metrics': self._calculate_metrics(equity_curve, trades),
+            'trades': trades,
+            'equity_curve': equity_curve
         }
 
-def plot_results(backtester):
-    plt.figure(figsize=(12, 6))
-    plt.plot(backtester.data.index, backtester.data['close'], label='Price', alpha=0.5)
-    
-    if backtester.trades:
-        buys = [t for t in backtester.trades if t['action'] == 'BUY']
-        sells = [t for t in backtester.trades if t['action'] == 'SELL']
-        
-        if buys:
-            plt.scatter(
-                [t['time'] for t in buys],
-                [t['price'] for t in buys],
-                color='green', label='Buy', marker='^', s=100
-            )
-        if sells:
-            plt.scatter(
-                [t['time'] for t in sells],
-                [t['price'] for t in sells],
-                color='red', label='Sell', marker='v', s=100
-            )
-    
-    plt.title('Backtest Results')
-    plt.legend()
-    plt.grid()
-    plt.show()
+    def _calculate_metrics(
+        self,
+        equity_curve: List[float],
+        trades: List[Trade]
+    ) -> Dict[str, float]:
+        """Calculate performance metrics"""
+        total_return = equity_curve[-1] - self.initial_capital
+        return_pct = (total_return / self.initial_capital) * 100
 
-if __name__ == "__main__":
-    print("===== STARTING BACKTEST =====")
-    
-    try:
-        live_data = fetch_live_data()
-        print(f"Fetched {len(live_data)} data points up to {live_data.index[-1]}")
-    except Exception as e:
-        print(f"Failed to fetch live data: {str(e)}")
-        print("Using sample data instead...")
-        live_data = pd.DataFrame({
-            'close': [1000, 1010, 1020, 1030, 1040],
-            'open': [990, 1005, 1015, 1025, 1035],
-            'high': [1010, 1020, 1030, 1040, 1050],
-            'low': [980, 995, 1005, 1015, 1025],
-            'volume': [5000, 6000, 7000, 8000, 9000]
-        }, index=pd.date_range(start='2023-01-01', periods=5))
-    
-    backtester = CryptoBacktester(live_data)
-    backtester.run_backtest()
-    
-    results = backtester.evaluate_performance()
-    print("\n===== RESULTS =====")
-    print(f"Initial Balance: ${backtester.initial_balance:,.2f}")
-    print(f"Final Balance: ${results['final_balance']:,.2f}")
-    print(f"Return: {results['return_pct']:.2f}%")
-    print(f"Trades Executed: {results['num_trades']}")
-    
-    # Save results AFTER creating backtester
-    backtester.data.to_csv('backtest_results.csv', index=True)
-    print(f"\nSaved results to: {os.path.abspath('backtest_results.csv')}")
-    
-    plot_results(backtester)
-    input("Press Enter to exit...")
+        # Win rate
+        win_rate = None
+        if trades:
+            winning_trades = [t for t in trades if t.pnl > 0]
+            win_rate = (len(winning_trades) / len(trades)) * 100
+
+        # Drawdown calculation
+        equity = pd.Series(equity_curve)
+        rolling_max = equity.cummax()
+        drawdown = (equity - rolling_max) / rolling_max
+        max_drawdown = drawdown.min() * 100
+
+        return {
+            'initial_capital': round(self.initial_capital, 2),
+            'final_value': round(equity_curve[-1], 2),
+            'total_return': round(total_return, 2),
+            'return_pct': round(return_pct, 2),
+            'win_rate': round(win_rate, 2) if win_rate else None,
+            'max_drawdown': round(max_drawdown, 2),
+            'num_trades': len(trades),
+            'total_fees': sum(t.fees for t in trades)
+        }
+
+    def save_trades(self, trades: List[Trade], filename: str = 'trades.csv') -> None:
+        """Save trades to CSV"""
+        pd.DataFrame([t.__dict__ for t in trades]).to_csv(filename, index=False)
