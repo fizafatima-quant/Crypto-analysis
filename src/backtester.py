@@ -1,160 +1,156 @@
-# backtester.py
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Tuple, Optional, Callable
-import logging
-from dataclasses import dataclass
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import numpy as np 
+from dataclasses import dataclass, field
+from typing import Dict, Tuple
+import math
+from fork_detector import ForkDetector
 
 @dataclass
-class Trade:
-    """Class to track individual trades"""
-    entry_date: str
-    entry_price: float
-    exit_date: Optional[str] = None
-    exit_price: Optional[float] = None
-    position_size: float = 0.0
-    fees: float = 0.0
-    pnl: Optional[float] = None
-    pnl_pct: Optional[float] = None
+class LPToken:
+    """Tracks LP positions and pool state"""
+    pair: str                  # e.g. "ETH-USDC"
+    address: str               # Pool address
+    reserves: Tuple[float, float]  # (reserve0, reserve1)
+    total_supply: float = 0    # Total LP tokens minted
+    fee_accumulated: float = 0 # Collected fees in token0
 
-class Backtester:
-    def __init__(
-        self,
-        data: pd.DataFrame,
-        strategy: Callable[[pd.DataFrame], pd.Series],
-        initial_capital: float = 10000.0,
-        fee_rate: float = 0.001,
-        price_column: str = "close",
-        stop_loss: Optional[float] = 0.05,  # 5%
-        take_profit: Optional[float] = 0.10,  # 10%
-        position_size: float = 0.1  # 10% of capital
-    ) -> None:
-        """
-        Initialize backtester with:
-        - data: DataFrame with price data
-        - strategy: Function that generates signals
-        - fee_rate: Transaction fee (0.1% default)
-        - stop_loss/take_profit: Risk management
-        - position_size: % of capital per trade
-        """
-        self.data = data
-        self.strategy = strategy
-        self.initial_capital = initial_capital
-        self.fee_rate = fee_rate
-        self.price_column = price_column
-        self.stop_loss = stop_loss
-        self.take_profit = take_profit
-        self.position_size = position_size
-        self._validate_inputs()
+class AMM:
+    def __init__(self, fee: float = 0.003, gas_fee: float = 0.0001):
+        self.fee = fee          # 0.3% LP fee
+        self.gas_fee = gas_fee  # 0.01% network fee
+        self.pools: Dict[str, LPToken] = {}
 
-    def _validate_inputs(self) -> None:
-        """Validate all inputs"""
-        if not isinstance(self.data, pd.DataFrame):
-            raise ValueError("Data must be a pandas DataFrame")
-        if self.price_column not in self.data.columns:
-            raise ValueError(f"Price column '{self.price_column}' not found")
-        if not 0 < self.position_size <= 1:
-            raise ValueError("Position size must be between 0 and 1")
+    def execute_swap(self, token_in: str, token_out: str, amount_in: float) -> Tuple[float, LPToken]:
+        """Execute swap with atomic reserve updates"""
+        pair_name = f"{token_in}-{token_out}"
+        if pair_name not in self.pools:
+            raise ValueError(f"Pool {pair_name} not found")
 
-    def run_backtest(self) -> Dict[str, any]:
-        """
-        Run backtest and return:
-        - performance metrics
-        - list of all trades
-        - equity curve
-        """
-        signals = self.strategy(self.data)
-        portfolio = self.initial_capital
-        position = 0.0
-        active_trade = None
-        trades = []
-        equity_curve = []
+        lp_token = self.pools[pair_name]
+        reserve_in, reserve_out = lp_token.reserves
 
-        for i, (date, row) in enumerate(self.data.iterrows()):
-            price = row[self.price_column]
-            
-            # Check for stop loss/take profit
-            if active_trade and position > 0:
-                current_pnl = (price - active_trade.entry_price) / active_trade.entry_price
-                if self.stop_loss and current_pnl <= -self.stop_loss:
-                    signals.iloc[i] = -1  # Force exit
-                elif self.take_profit and current_pnl >= self.take_profit:
-                    signals.iloc[i] = -1
+        # Calculate output with 0.3% fee
+        amount_in_with_fee = amount_in * (1 - self.fee)
+        amount_out = (amount_in_with_fee * reserve_out) / (reserve_in + amount_in_with_fee)
 
-            # Buy signal
-            if signals.iloc[i] == 1 and position == 0:
-                trade_size = portfolio * self.position_size
-                fee = trade_size * self.fee_rate
-                active_trade = Trade(
-                    entry_date=date,
-                    entry_price=price,
-                    position_size=trade_size,
-                    fees=fee
-                )
-                portfolio -= trade_size + fee
-                position = trade_size / price
+        # Update reserves and track fees
+        lp_token.reserves = (
+            reserve_in + amount_in,
+            reserve_out - amount_out
+        )
+        lp_token.fee_accumulated += amount_in * self.fee
 
-            # Sell signal
-            elif signals.iloc[i] == -1 and position > 0:
-                fee = position * price * self.fee_rate
-                pnl = position * (price - active_trade.entry_price) - active_trade.fees - fee
-                pnl_pct = (pnl / active_trade.position_size) * 100
+        # Apply gas fee
+        return amount_out * (1 - self.gas_fee), lp_token
 
-                active_trade.exit_date = date
-                active_trade.exit_price = price
-                active_trade.pnl = pnl
-                active_trade.pnl_pct = pnl_pct
-                active_trade.fees += fee
+    def add_liquidity(self, token0: str, token1: str, amount0: float, amount1: float) -> LPToken:
+        """Add liquidity with proper LP token minting"""
+        pair_name = f"{token0}-{token1}"
 
-                trades.append(active_trade)
-                portfolio += position * price - fee
-                position = 0.0
-                active_trade = None
+        if pair_name not in self.pools:
+            # Initial LP tokens = sqrt(amount0 * amount1)
+            initial_supply = math.sqrt(amount0 * amount1)
+            self.pools[pair_name] = LPToken(
+                pair=pair_name,
+                address=f"0x{pair_name[:8]}",
+                reserves=(amount0, amount1),
+                total_supply=initial_supply
+            )
+            return self.pools[pair_name]
 
-            equity_curve.append(portfolio)
+        # Calculate LP tokens based on share
+        reserve0, reserve1 = self.pools[pair_name].reserves
+        lp_amount = min(
+            amount0 / reserve0,
+            amount1 / reserve1
+        ) * self.pools[pair_name].total_supply
 
-        return {
-            'metrics': self._calculate_metrics(equity_curve, trades),
-            'trades': trades,
-            'equity_curve': equity_curve
-        }
+        # Update reserves
+        self.pools[pair_name].reserves = (
+            reserve0 + amount0,
+            reserve1 + amount1
+        )
+        self.pools[pair_name].total_supply += lp_amount
+        return self.pools[pair_name]
 
-    def _calculate_metrics(
-        self,
-        equity_curve: List[float],
-        trades: List[Trade]
-    ) -> Dict[str, float]:
-        """Calculate performance metrics"""
-        total_return = equity_curve[-1] - self.initial_capital
-        return_pct = (total_return / self.initial_capital) * 100
+class DEXBacktester:
+    def __init__(self):
+        self.amm = AMM()
+        self.fork_detector = ForkDetector()
+        self.user_balances: Dict[str, Dict[str, float]] = {}  # user -> {token: amount}
+        self.user_lp_positions: Dict[str, Dict[str, float]] = {}  # user -> {pool: lp_tokens}
 
-        # Win rate
-        win_rate = None
-        if trades:
-            winning_trades = [t for t in trades if t.pnl > 0]
-            win_rate = (len(winning_trades) / len(trades)) * 100
+    def safe_swap(self, user: str, token_in: str, token_out: str, amount_in: float) -> float:
+        """Secure swap with fork detection"""
+        # 1. Check balances
+        if self.user_balances.get(user, {}).get(token_in, 0) < amount_in:
+            raise ValueError(f"Insufficient {token_in} balance")
 
-        # Drawdown calculation
-        equity = pd.Series(equity_curve)
-        rolling_max = equity.cummax()
-        drawdown = (equity - rolling_max) / rolling_max
-        max_drawdown = drawdown.min() * 100
+        # 2. Check for forks
+        pool_address = self.amm.pools[f"{token_in}-{token_out}"].address
+        if self.fork_detector.is_vampire_fork(pool_address):
+            raise ValueError(f"Security Alert: {token_in}-{token_out} pool is a fork")
 
-        return {
-            'initial_capital': round(self.initial_capital, 2),
-            'final_value': round(equity_curve[-1], 2),
-            'total_return': round(total_return, 2),
-            'return_pct': round(return_pct, 2),
-            'win_rate': round(win_rate, 2) if win_rate else None,
-            'max_drawdown': round(max_drawdown, 2),
-            'num_trades': len(trades),
-            'total_fees': sum(t.fees for t in trades)
-        }
+        # 3. Execute swap
+        amount_out, updated_pool = self.amm.execute_swap(token_in, token_out, amount_in)
 
-    def save_trades(self, trades: List[Trade], filename: str = 'trades.csv') -> None:
-        """Save trades to CSV"""
-        pd.DataFrame([t.__dict__ for t in trades]).to_csv(filename, index=False)
+        # 4. Update balances
+        if user not in self.user_balances:
+            self.user_balances[user] = {}
+        self.user_balances[user][token_in] = self.user_balances[user].get(token_in, 0) - amount_in
+        self.user_balances[user][token_out] = self.user_balances[user].get(token_out, 0) + amount_out
+
+        print(f"✅ {user} swapped {amount_in} {token_in} → {amount_out:.2f} {token_out}")
+        print(f"   New reserves: {updated_pool.reserves}")
+        return amount_out
+
+    def provide_liquidity(self, user: str, token0: str, token1: str, amount0: float, amount1: float):
+        """Add liquidity with full LP tracking"""
+        # 1. Check balances
+        if self.user_balances.get(user, {}).get(token0, 0) < amount0 or \
+           self.user_balances.get(user, {}).get(token1, 0) < amount1:
+            raise ValueError("Insufficient token balance")
+
+        # 2. Add liquidity
+        lp_token = self.amm.add_liquidity(token0, token1, amount0, amount1)
+
+        # 3. Update user balances
+        if user not in self.user_balances:
+            self.user_balances[user] = {}
+        self.user_balances[user][token0] -= amount0
+        self.user_balances[user][token1] -= amount1
+
+        # 4. Track LP tokens
+        if user not in self.user_lp_positions:
+            self.user_lp_positions[user] = {}
+        lp_amount = math.sqrt(amount0 * amount1) if lp_token.total_supply == 0 else \
+                   min(amount0/lp_token.reserves[0], amount1/lp_token.reserves[1]) * lp_token.total_supply
+        self.user_lp_positions[user][lp_token.pair] = self.user_lp_positions[user].get(lp_token.pair, 0) + lp_amount
+
+        print(f"💰 {user} added {amount0} {token0} + {amount1} {token1}")
+        print(f"   Received {lp_amount:.2f} {lp_token.pair} LP tokens")
+
+if __name__ == "__main__":
+    # Initialize backtester
+    dex = DEXBacktester()
+    
+    # Setup test user
+    dex.user_balances["alice"] = {"ETH": 100, "USDC": 50000}
+    
+    print("===== DEX Backtester =====")
+    
+    # 1. Create pool
+    print("\n[1] Creating ETH-USDC pool")
+    dex.provide_liquidity("alice", "ETH", "USDC", 10, 20000)
+    
+    # 2. Execute safe swap
+    print("\n[2] Alice swaps ETH for USDC")
+    try:
+        dex.safe_swap("alice", "ETH", "USDC", 1)
+    except ValueError as e:
+        print(f"🚨 {e}")
+    
+    # 3. Show final state
+    print("\n[Final State]")
+    print("Alice balances:", {k: round(v, 2) for k, v in dex.user_balances["alice"].items() if v > 0})
+    print("Alice LP positions:", {k: round(v, 2) for k, v in dex.user_lp_positions["alice"].items()})
+    print("ETH-USDC pool reserves:", dex.amm.pools["ETH-USDC"].reserves)
