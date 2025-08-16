@@ -1,26 +1,47 @@
-# fork_detector.py
+# src/fork_detector.py
+from typing import List, Dict
 import requests
 
-def get_recent_forks(min_tvl: float = 1_000_000) -> list:
-    """Fetch forks with >$1M TVL from DeFiLlama's protocols list."""
+def get_recent_forks(min_tvl: float = 1_000_000) -> List[Dict]:
+    """
+    Findet neue DEX-Forks (Uniswap-basiert)
+
+    Args:
+        min_tvl: Mindest-Total Value Locked in USD (Standard: 1.000.000)
+
+    Returns:
+        Liste von Dictionaries mit Fork-Daten
+    """
     try:
-        response = requests.get("https://api.llama.fi/protocols")
-        protocols = response.json()
+        response = requests.get("https://api.llama.fi/protocols", timeout=10)
+        response.raise_for_status()
         
-        forks = [
-            p for p in protocols 
-            if isinstance(p, dict)
-            and isinstance(p.get("tvl"), (int, float))  # Check if TVL is a number
-            and p["tvl"] > min_tvl
-            and "uni" in p.get("name", "").lower()
-        ]
-        return forks
+        valid_forks = []
+        for protocol in response.json():
+            try:
+                # Safely extract and validate values
+                tvl = float(protocol.get('tvl', 0)) if protocol.get('tvl') is not None else 0
+                name = str(protocol.get('name', '')).lower()
+                
+                if tvl > min_tvl and 'uni' in name:
+                    valid_forks.append({
+                        'name': protocol.get('name', 'Unbekannt'),
+                        'tvl': tvl,
+                        'chain': protocol.get('chain', 'Unbekannt')
+                    })
+            except (TypeError, ValueError) as e:
+                continue
+                
+        return valid_forks
+        
+    except requests.exceptions.RequestException as e:
+        print(f"API-Anfrage fehlgeschlagen: {e}")
+        return []
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Unerwarteter Fehler: {str(e)}")
         return []
 
 if __name__ == "__main__":
+    print("Testaufruf - Deutsche Version:")
     forks = get_recent_forks()
-    print(f"Found {len(forks)} forks with TVL > $1M:")
-    for fork in forks:
-        print(f"- {fork['name']} (TVL: ${fork['tvl']:,.2f})")
+    print(f"Gefundene Forks: {len(forks)}")
