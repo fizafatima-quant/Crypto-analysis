@@ -1,107 +1,168 @@
 # src/dex_backtester.py
-from fork_detector import get_recent_forks
-from typing import List, Dict, Optional
+import os
+import requests
+import json
 import pandas as pd
-import numpy as np  # Added missing import
+import numpy as np
 from datetime import datetime
+from typing import List, Dict, Optional
 import matplotlib.pyplot as plt
 
 class DexBacktester:
     def __init__(self, min_tvl: float = 1_000_000):
-        """
-        Initialize backtester with minimum TVL threshold.
-        
-        Args:
-            min_tvl (float): Minimum TVL in USD to consider a fork (default: $1M)
-        """
         self.min_tvl = min_tvl
-        self.active_forks: List[Dict] = []
+        self.active_forks = []
+        self.known_forks = []
         self.historical_data = pd.DataFrame()
-        self.last_updated: Optional[datetime] = None
+        self.last_updated = None
+        
+        # Proper path handling
+        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.data_dir = os.path.join(self.project_root, 'data')
+        os.makedirs(self.data_dir, exist_ok=True)
+
+    def _safe_get(self, data: dict, keys: list, default=None):
+        """Safely get nested dictionary values"""
+        for key in keys:
+            try:
+                data = data[key]
+            except (KeyError, TypeError):
+                return default
+        return data
 
     def refresh_forks(self) -> List[Dict]:
-        """
-        Fetch latest forks from DeFiLlama and update active_forks.
-        Returns list of forks with TVL > min_tvl.
-        """
-        self.active_forks = get_recent_forks(min_tvl=self.min_tvl)
-        self.last_updated = datetime.now()
-        
-        if not self.active_forks:
-            print("Warning: No forks found matching criteria")
-        return self.active_forks
+        """Fetch forks with robust error handling"""
+        try:
+            response = requests.get("https://api.llama.fi/protocols", timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            self.active_forks = []
+            for protocol in data:
+                try:
+                    tvl = float(self._safe_get(protocol, ['tvl'], 0))
+                    name = str(self._safe_get(protocol, ['name'], '')).lower()
+                    
+                    if tvl > self.min_tvl and 'uni' in name:
+                        self.active_forks.append({
+                            'name': protocol.get('name', 'unknown'),
+                            'tvl': tvl,
+                            'chain': protocol.get('chain', 'unknown')
+                        })
+                except (TypeError, ValueError) as e:
+                    continue
+                    
+            self.last_updated = datetime.now()
+            print(f"✅ Found {len(self.active_forks)} active forks")
+            return self.active_forks
+            
+        except Exception as e:
+            print(f"❌ API Error: {str(e)}")
+            return []
+
+    def load_known_forks(self) -> List[Dict]:
+        """Load historical data with validation"""
+        try:
+            filepath = os.path.join(self.data_dir, "known_forks.json")
+            with open(filepath) as f:
+                data = json.load(f)
+                
+            self.known_forks = []
+            for fork in data:
+                if isinstance(fork, dict):
+                    self.known_forks.append({
+                        'name': fork.get('name', 'unknown'),
+                        'stolen_tvl': float(fork.get('stolen_tvl', 0)),
+                        'parent': fork.get('parent', 'unknown'),
+                        'chain': fork.get('chain', 'unknown')
+                    })
+                    
+            print(f"✅ Loaded {len(self.known_forks)} historical forks")
+            return self.known_forks
+            
+        except Exception as e:
+            print(f"❌ File Error: {str(e)}")
+            return []
 
     def analyze_tvl_growth(self, days: int = 30) -> pd.DataFrame:
-        """
-        Simulate TVL growth analysis with realistic random walk model.
-        
-        Args:
-            days (int): Number of days to simulate (default: 30)
-        
-        Returns:
-            pd.DataFrame: Analysis results with growth metrics
-        """
+        """Safer growth analysis"""
         if not self.active_forks:
             self.refresh_forks()
             
         results = []
         for fork in self.active_forks:
-            # More realistic simulation with volatility clustering
-            daily_returns = [0]
-            current_tvl = fork["tvl"]
-            
-            for _ in range(1, days):
-                # Random walk with momentum effect
-                prev_return = daily_returns[-1]
-                new_return = prev_return * 0.7 + np.random.normal(0, 0.05)
-                daily_returns.append(new_return)
-            
-            # Calculate metrics
-            simulated_tvl = [current_tvl * (1 + r) for r in daily_returns]
-            peak_tvl = max(simulated_tvl)
-            drawdown = (peak_tvl - simulated_tvl[-1]) / peak_tvl
-            
-            results.append({
-                "name": fork["name"],
-                "start_tvl": current_tvl,
-                "end_tvl": simulated_tvl[-1],
-                "growth_pct": (simulated_tvl[-1] - current_tvl) / current_tvl * 100,
-                "max_drawdown": drawdown * 100,
-                "volatility": np.std(daily_returns) * 100
-            })
-        
+            try:
+                current_tvl = float(fork['tvl'])
+                daily_returns = [0]
+                
+                for _ in range(1, days):
+                    prev_return = daily_returns[-1]
+                    new_return = prev_return * 0.7 + np.random.normal(0, 0.05)
+                    daily_returns.append(new_return)
+                
+                simulated_tvl = [current_tvl * (1 + r) for r in daily_returns]
+                results.append({
+                    'name': fork['name'],
+                    'start_tvl': current_tvl,
+                    'end_tvl': simulated_tvl[-1],
+                    'growth_pct': ((simulated_tvl[-1] - current_tvl) / current_tvl) * 100,
+                    'chain': fork.get('chain', 'unknown')
+                })
+                
+            except Exception as e:
+                print(f"⚠️ Skipping {fork.get('name')}: {str(e)}")
+                continue
+                
         self.historical_data = pd.DataFrame(results)
         return self.historical_data
 
-    def visualize_growth(self, top_n: int = 10):
-        """
-        Plot TVL growth for top forks by current TVL.
-        
-        Args:
-            top_n (int): Number of top forks to visualize
-        """
-        if self.historical_data.empty:
-            self.analyze_tvl_growth()
-            
-        top_forks = self.historical_data.nlargest(top_n, "start_tvl")
-        plt.figure(figsize=(12, 6))
-        plt.barh(top_forks["name"], top_forks["growth_pct"])
-        plt.xlabel("Growth Percentage (%)")
-        plt.title(f"Top {top_n} Forks by TVL Growth (Last 30 Days)")
-        plt.tight_layout()
-        plt.savefig("tvl_growth.png")
-        plt.close()
+    def visualize_results(self):
+        """Generate visualizations with error handling"""
+        try:
+            if self.historical_data.empty:
+                self.analyze_tvl_growth()
+                
+            if not self.historical_data.empty:
+                # Basic growth plot
+                plt.figure(figsize=(12, 6))
+                self.historical_data.sort_values('growth_pct').plot.barh(
+                    x='name', 
+                    y='growth_pct',
+                    title='TVL Growth Simulation'
+                )
+                plt.tight_layout()
+                plt.savefig(os.path.join(self.data_dir, 'growth_comparison.png'))
+                plt.close()
+                
+        except Exception as e:
+            print(f"❌ Visualization failed: {str(e)}")
 
-    def save_results(self, filename: str = "backtest_results.csv"):
-        """Save analysis results to CSV with timestamp metadata."""
-        if not self.historical_data.empty:
-            self.historical_data.to_csv(filename, index=False)
-            print(f"Results saved to {filename} (Updated: {self.last_updated})")
+    def save_results(self):
+        """Save data with validation"""
+        try:
+            if not self.historical_data.empty:
+                self.historical_data.to_csv(
+                    os.path.join(self.data_dir, 'backtest_results.csv'),
+                    index=False
+                )
+                print(f"💾 Saved results to {self.data_dir}")
+        except Exception as e:
+            print(f"❌ Failed to save results: {str(e)}")
 
 if __name__ == "__main__":
-    # Example usage
-    backtester = DexBacktester(min_tvl=5_000_000)  # $5M threshold
+    print("🚀 Starting DEX Backtester")
+    
+    backtester = DexBacktester(min_tvl=1_000_000)
+    
+    # Load data
     backtester.refresh_forks()
-    backtester.analyze_tvl_growth()
-    backtester.visualize_growth()
+    backtester.load_known_forks()
+    
+    # Run analysis
+    backtester.analyze_tvl_growth(days=30)
+    
+    # Generate outputs
+    backtester.visualize_results()
     backtester.save_results()
+    
+    print("✅ Analysis completed")
