@@ -1,168 +1,149 @@
-# src/dex_backtester.py
-import os
-import requests
-import json
-import pandas as pd
-import numpy as np
-from datetime import datetime
-from typing import List, Dict, Optional
+from mev_resistance import is_sandwich_safe
+from typing import Dict, Tuple, List
+import logging
 import matplotlib.pyplot as plt
 
-class DexBacktester:
-    def __init__(self, min_tvl: float = 1_000_000):
-        self.min_tvl = min_tvl
-        self.active_forks = []
-        self.known_forks = []
-        self.historical_data = pd.DataFrame()
-        self.last_updated = None
+logging.basicConfig(level=logging.INFO)
+
+class LiquidityPool:
+    def __init__(self, reserves: Dict[str, float]):
+        self.reserves = reserves.copy()
+        self.initial_reserves = reserves.copy()  # Store initial reserves
+        self.k = reserves[list(reserves.keys())[0]] * reserves[list(reserves.keys())[1]]  # Constant product
         
-        # Proper path handling
-        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.data_dir = os.path.join(self.project_root, 'data')
-        os.makedirs(self.data_dir, exist_ok=True)
+    def get_price(self, token_in: str, token_out: str) -> float:
+        return self.reserves[token_out] / self.reserves[token_in]
+        
+    def swap(self, token_in: str, amount_in: float) -> float:
+        token_out = [t for t in self.reserves.keys() if t != token_in][0]
+        self.reserves[token_in] += amount_in
+        amount_out = self.reserves[token_out] - (self.k / self.reserves[token_in])
+        self.reserves[token_out] = self.k / self.reserves[token_in]
+        return amount_out
 
-    def _safe_get(self, data: dict, keys: list, default=None):
-        """Safely get nested dictionary values"""
-        for key in keys:
-            try:
-                data = data[key]
-            except (KeyError, TypeError):
-                return default
-        return data
+    def reset(self):
+        self.reserves = self.initial_reserves.copy()
+        self.k = self.reserves[list(self.reserves.keys())[0]] * self.reserves[list(self.reserves.keys())[1]]
 
-    def refresh_forks(self) -> List[Dict]:
-        """Fetch forks with robust error handling"""
-        try:
-            response = requests.get("https://api.llama.fi/protocols", timeout=10)
-            response.raise_for_status()
-            data = response.json()
+class DexBacktester:
+    def __init__(self, pool: LiquidityPool):
+        self.pool = pool
+        self.swap_history = []
+        
+    def execute_swap(self, token_in: str, amount_in: float) -> Tuple[float, float]:
+        """Execute a swap with MEV protection"""
+        token_out = [t for t in self.pool.reserves.keys() if t != token_in][0]
+        price_before = self.pool.get_price(token_in, token_out)
+        
+        # Check against INITIAL pool reserves for MEV risk
+        if not is_sandwich_safe(amount_in, self.pool.initial_reserves):
+            logging.warning(f"MEV risk detected! Swap {amount_in} too large for initial pool {self.pool.initial_reserves}")
             
-            self.active_forks = []
-            for protocol in data:
-                try:
-                    tvl = float(self._safe_get(protocol, ['tvl'], 0))
-                    name = str(self._safe_get(protocol, ['name'], '')).lower()
-                    
-                    if tvl > self.min_tvl and 'uni' in name:
-                        self.active_forks.append({
-                            'name': protocol.get('name', 'unknown'),
-                            'tvl': tvl,
-                            'chain': protocol.get('chain', 'unknown')
-                        })
-                except (TypeError, ValueError) as e:
-                    continue
-                    
-            self.last_updated = datetime.now()
-            print(f"✅ Found {len(self.active_forks)} active forks")
-            return self.active_forks
+            self.swap_history.append({
+                'token_in': token_in,
+                'amount_in': amount_in,
+                'amount_out': 0.0,
+                'price_before': price_before,
+                'price_after': price_before,
+                'price_impact': 0.0,
+                'status': 'failed',
+                'reason': 'MEV risk'
+            })
+            return 0.0, price_before
             
-        except Exception as e:
-            print(f"❌ API Error: {str(e)}")
-            return []
-
-    def load_known_forks(self) -> List[Dict]:
-        """Load historical data with validation"""
-        try:
-            filepath = os.path.join(self.data_dir, "known_forks.json")
-            with open(filepath) as f:
-                data = json.load(f)
-                
-            self.known_forks = []
-            for fork in data:
-                if isinstance(fork, dict):
-                    self.known_forks.append({
-                        'name': fork.get('name', 'unknown'),
-                        'stolen_tvl': float(fork.get('stolen_tvl', 0)),
-                        'parent': fork.get('parent', 'unknown'),
-                        'chain': fork.get('chain', 'unknown')
-                    })
-                    
-            print(f"✅ Loaded {len(self.known_forks)} historical forks")
-            return self.known_forks
+        amount_out = self.pool.swap(token_in, amount_in)
+        price_after = self.pool.get_price(token_in, token_out)
+        price_impact = (price_after - price_before) / price_before
+        
+        self.swap_history.append({
+            'token_in': token_in,
+            'amount_in': amount_in,
+            'amount_out': amount_out,
+            'price_before': price_before,
+            'price_after': price_after,
+            'price_impact': price_impact,
+            'status': 'success',
+            'reason': None
+        })
+        
+        return amount_out, price_after
+        
+    def get_stats(self) -> Dict:
+        """Returns trading statistics"""
+        if not self.swap_history:
+            return {}
             
-        except Exception as e:
-            print(f"❌ File Error: {str(e)}")
-            return []
-
-    def analyze_tvl_growth(self, days: int = 30) -> pd.DataFrame:
-        """Safer growth analysis"""
-        if not self.active_forks:
-            self.refresh_forks()
+        successful_swaps = [s for s in self.swap_history if s['status'] == 'success']
+        
+        stats = {
+            'total_swaps': len(self.swap_history),
+            'successful_swaps': len(successful_swaps),
+            'failed_swaps': len(self.swap_history) - len(successful_swaps),
+            'total_volume': sum(s['amount_in'] for s in self.swap_history),
+            'executed_volume': sum(s['amount_in'] for s in successful_swaps),
+            'current_pool_reserves': self.pool.reserves.copy()
+        }
+        
+        if successful_swaps:
+            stats['avg_price_impact'] = sum(s['price_impact'] for s in successful_swaps) / len(successful_swaps)
+            stats['avg_successful_swap_size'] = sum(s['amount_in'] for s in successful_swaps) / len(successful_swaps)
+            stats['total_output'] = sum(s['amount_out'] for s in successful_swaps)
+        else:
+            stats['avg_price_impact'] = 0
+            stats['avg_successful_swap_size'] = 0
+            stats['total_output'] = 0
             
-        results = []
-        for fork in self.active_forks:
-            try:
-                current_tvl = float(fork['tvl'])
-                daily_returns = [0]
-                
-                for _ in range(1, days):
-                    prev_return = daily_returns[-1]
-                    new_return = prev_return * 0.7 + np.random.normal(0, 0.05)
-                    daily_returns.append(new_return)
-                
-                simulated_tvl = [current_tvl * (1 + r) for r in daily_returns]
-                results.append({
-                    'name': fork['name'],
-                    'start_tvl': current_tvl,
-                    'end_tvl': simulated_tvl[-1],
-                    'growth_pct': ((simulated_tvl[-1] - current_tvl) / current_tvl) * 100,
-                    'chain': fork.get('chain', 'unknown')
-                })
-                
-            except Exception as e:
-                print(f"⚠️ Skipping {fork.get('name')}: {str(e)}")
-                continue
-                
-        self.historical_data = pd.DataFrame(results)
-        return self.historical_data
+        return stats
+    
+    def visualize_swaps(self):
+        """Plots price impact over swap sequence"""
+        if not self.swap_history:
+            print("No swaps to visualize")
+            return
+            
+        successful_indices = [i for i, s in enumerate(self.swap_history) if s['status'] == 'success']
+        price_impacts = [self.swap_history[i]['price_impact'] for i in successful_indices]
+        
+        plt.figure(figsize=(10, 5))
+        plt.plot(successful_indices, price_impacts, 'bo-')
+        plt.xlabel('Successful Swap Index')
+        plt.ylabel('Price Impact')
+        plt.title('Price Impact Over Successful Swaps')
+        plt.grid(True)
+        plt.show()
 
-    def visualize_results(self):
-        """Generate visualizations with error handling"""
-        try:
-            if self.historical_data.empty:
-                self.analyze_tvl_growth()
-                
-            if not self.historical_data.empty:
-                # Basic growth plot
-                plt.figure(figsize=(12, 6))
-                self.historical_data.sort_values('growth_pct').plot.barh(
-                    x='name', 
-                    y='growth_pct',
-                    title='TVL Growth Simulation'
-                )
-                plt.tight_layout()
-                plt.savefig(os.path.join(self.data_dir, 'growth_comparison.png'))
-                plt.close()
-                
-        except Exception as e:
-            print(f"❌ Visualization failed: {str(e)}")
-
-    def save_results(self):
-        """Save data with validation"""
-        try:
-            if not self.historical_data.empty:
-                self.historical_data.to_csv(
-                    os.path.join(self.data_dir, 'backtest_results.csv'),
-                    index=False
-                )
-                print(f"💾 Saved results to {self.data_dir}")
-        except Exception as e:
-            print(f"❌ Failed to save results: {str(e)}")
+    def reset(self):
+        """Reset the backtester state"""
+        self.pool.reset()
+        self.swap_history = []
 
 if __name__ == "__main__":
-    print("🚀 Starting DEX Backtester")
+    # Initialize pool with 1000 ETH and 1000 USDC
+    pool = LiquidityPool({'ETH': 1000.0, 'USDC': 1000.0})
+    backtester = DexBacktester(pool)
     
-    backtester = DexBacktester(min_tvl=1_000_000)
+    print("Starting pool reserves:", pool.initial_reserves)
     
-    # Load data
-    backtester.refresh_forks()
-    backtester.load_known_forks()
+    # Test safe swap (1 ETH)
+    amount_out, price = backtester.execute_swap('ETH', 1.0)
+    print(f"1. Swap 1 ETH -> Received {amount_out:.6f} USDC at price {price:.6f}")
     
-    # Run analysis
-    backtester.analyze_tvl_growth(days=30)
+    # Test dangerous swap (100 ETH - should trigger MEV warning)
+    amount_out, price = backtester.execute_swap('ETH', 100.0)
+    print(f"2. Swap 100 ETH -> Blocked (MEV risk)")
     
-    # Generate outputs
-    backtester.visualize_results()
-    backtester.save_results()
+    # Test threshold swap (10 ETH - exactly 1% of initial pool)
+    amount_out, price = backtester.execute_swap('ETH', 10.0)
+    print(f"3. Swap 10 ETH -> Received {amount_out:.6f} USDC at price {price:.6f}")
     
-    print("✅ Analysis completed")
+    # Print stats
+    stats = backtester.get_stats()
+    print("\nFinal Statistics:")
+    for k, v in stats.items():
+        if k != 'current_pool_reserves':
+            print(f"{k.replace('_', ' ').title()}: {v}")
+    
+    print("\nFinal Pool Reserves:", stats['current_pool_reserves'])
+    
+    # Visualize
+    backtester.visualize_swaps()
