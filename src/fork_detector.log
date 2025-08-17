@@ -1,0 +1,26 @@
+2025-08-16 16:52:49,113 - ERROR - Unexpected error: API down
+2025-08-16 16:53:46,744 - ERROR - Unexpected error: API down
+2025-08-16 16:53:57,720 - ERROR - Unexpected error: API down
+2025-08-16 16:54:09,843 - ERROR - Unexpected error: API down
+2025-08-16 16:58:25,469 - ERROR - Unexpected error: API down
+2025-08-16 16:58:45,196 - ERROR - Unexpected error: API down
+2025-08-16 17:06:34,034 - ERROR - API Error @ 2025-08-16 17:06:34.034325: 
+2025-08-16 17:11:57,869 - ERROR - API Error @ 2025-08-16 17:11:57.869066: Simulated timeout
+2025-08-16 17:11:58,870 - ERROR - API Error @ 2025-08-16 17:11:58.870388: Simulated timeout
+2025-08-16 17:12:00,872 - ERROR - API Error @ 2025-08-16 17:12:00.872793: Simulated timeout
+2025-08-16 17:12:17,471 - ERROR - API Error @ 2025-08-16 17:12:17.471764: Simulated timeout
+2025-08-16 17:12:18,472 - ERROR - API Error @ 2025-08-16 17:12:18.472861: Simulated timeout
+2025-08-16 17:12:20,474 - ERROR - API Error @ 2025-08-16 17:12:20.474411: Simulated timeout
+2025-08-16 17:16:25,436 - ERROR - API Error @ 2025-08-16 17:16:25.436041: Simulated timeout
+2025-08-16 17:16:26,437 - ERROR - API Error @ 2025-08-16 17:16:26.437108: Simulated timeout
+2025-08-16 17:16:28,438 - ERROR - API Error @ 2025-08-16 17:16:28.438636: Simulated timeout
+2025-08-16 17:16:55,692 - ERROR - API Error @ 2025-08-16 17:16:55.692861: Simulated timeout
+2025-08-16 17:16:56,694 - ERROR - API Error @ 2025-08-16 17:16:56.694277: Simulated timeout
+2025-08-16 17:16:58,695 - ERROR - API Error @ 2025-08-16 17:16:58.695816: Simulated timeout
+2025-08-16 17:18:50,772 - ERROR - API Error @ 2025-08-16 17:18:50.772176: Simulated timeout
+2025-08-16 17:20:28,589 - ERROR - API Error @ 2025-08-16 17:20:28.588823: Simulated timeout
+2025-08-16 17:20:29,589 - ERROR - API Error @ 2025-08-16 17:20:29.589859: Simulated timeout
+2025-08-16 17:20:31,591 - ERROR - API Error @ 2025-08-16 17:20:31.591238: Simulated timeout
+2025-08-16 17:23:52,534 - ERROR - API Error @ 2025-08-16 17:23:52.534741: Simulated timeout
+2025-08-16 17:23:53,536 - ERROR - API Error @ 2025-08-16 17:23:53.535951: Simulated timeout
+2025-08-16 17:23:55,537 - ERROR - API Error @ 2025-08-16 17:23:55.537496: Simulated timeout

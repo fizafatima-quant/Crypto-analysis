@@ -1,0 +1,5 @@
+2025-08-17 13:50:25 - ERROR - \U0001f6a8 MEV check failed for 0xHACK: Sandwich attack detected!
+Traceback (most recent call last):
+  File "C:\Users\Hp\Crypto-analysis\src\mev_bot.py", line 16, in is_sandwich_safe
+    raise ValueError("Sandwich attack detected!")
+ValueError: Sandwich attack detected!
