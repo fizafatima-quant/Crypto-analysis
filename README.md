@@ -1,7 +1,7 @@
 # 🔄 DEX Backtester & Liquidity Analysis Toolkit
 
 **Quantifying vampire attacks and liquidity migration in decentralized exchanges**  
-*(Project in active development - last updated MM/DD/YYYY)*  
+(Project in active development)
 
 ## 🎯 Project Focus
 - **Tracking** liquidity flows during DEX "vampire attacks" (e.g., SushiSwap vs Uniswap)
