@@ -1,30 +1,19 @@
-# Crypto Technical Analysis Toolkit
+# 🔄 DEX Backtester & Liquidity Analysis Toolkit
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![Backtrader](https://img.shields.io/badge/backtrader-2.0-green)
-![Status](https://img.shields.io/badge/status-active-brightgreen)
+**Quantifying vampire attacks and liquidity migration in decentralized exchanges**  
+(Project in active development)
 
-A Python-based cryptocurrency analysis system implementing:
-- Real-time data fetching
-- Technical indicators (RSI, MACD, Bollinger Bands)
-- Automated trading signals
-- Backtesting framework (Step 8 coming soon)
+## 🎯 Project Focus
+- **Tracking** liquidity flows during DEX "vampire attacks" (e.g., SushiSwap vs Uniswap)
+- **Backtesting** LP migration strategies
+- **Analyzing** token incentive effectiveness
 
-## 📦 Current Implementation (Steps 1-7)
-
-### Implemented Modules
-| File | Purpose | Status |
-|------|---------|--------|
-| `data_fetcher.py` | Fetches OHLCV data from Binance | ✅ Working |
-| `indicators.py` | Calculates technical indicators | ✅ Working |
-| `signals.py` | Generates buy/sell signals | ✅ Working |
-
-## 🛠️ Setup
-
-### Prerequisites
+## 🛠️ Current Implementation
 ```bash
-git clone https://github.com/yourusername/crypto-analysis.git
-cd crypto-analysis
-python -m venv venv
-venv\Scripts\activate  # Windows
-
+├── data/                   # Raw and processed on-chain datasets
+├── notebooks/              # Jupyter analysis notebooks (WIP)
+│   └── liquidity_flow.ipynb  # Initial TVL migration analysis
+├── scripts/                # Python modules
+│   ├── data_fetcher.py     # Fetch DEX data from APIs
+│   └── metrics.py          # Calculate LP metrics
+└── requirements.txt        # Python dependencies
