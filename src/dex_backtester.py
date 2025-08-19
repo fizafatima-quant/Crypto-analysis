@@ -9,7 +9,7 @@ class LiquidityPool:
         self.reserves = reserves.copy()
         self.initial_reserves = reserves.copy()
         self._validate_reserves()
-        self.k = self.reserves['ETH'] * self.reserves['USDC']  # Store constant product
+        self.k = self.reserves['ETH'] * self.reserves['USDC']  # Constant product
         
     def _validate_reserves(self):
         if len(self.reserves) != 2:
@@ -20,21 +20,19 @@ class LiquidityPool:
             raise ValueError("Pool must contain ETH and USDC")
 
     def swap(self, token_in: str, amount_in: float) -> float:
-        """Proper AMM swap implementation maintaining constant product"""
         if amount_in <= 0:
             raise ValueError("Swap amount must be positive")
         
         token_out = 'USDC' if token_in == 'ETH' else 'ETH'
         
-        # --- Gas Efficiency Optimization ---
-        # Cache reserves locally instead of multiple dict lookups
+        # --- Gas Efficiency Optimization: cache reserves locally ---
         reserve_in = self.reserves[token_in]
         reserve_out = self.reserves[token_out]
         
         new_reserve_in = reserve_in + amount_in
         amount_out = reserve_out - (self.k / new_reserve_in)
         
-        # Update reserves (single write each)
+        # Single write per token
         self.reserves[token_in] = new_reserve_in
         self.reserves[token_out] = self.k / new_reserve_in
         
@@ -43,6 +41,7 @@ class LiquidityPool:
     def reset(self):
         self.reserves = self.initial_reserves.copy()
         self.k = self.reserves['ETH'] * self.reserves['USDC']
+
 
 class DexBacktester:
     def __init__(self, pool: LiquidityPool):
@@ -56,8 +55,7 @@ class DexBacktester:
             
             token_out = 'USDC' if token_in == 'ETH' else 'ETH'
 
-            # --- Gas Efficiency Optimization ---
-            # Cache reserves locally (avoid repeating dict lookups)
+            # --- Gas Efficiency Optimization: cache reserves locally ---
             reserve_in = self.pool.reserves[token_in]
             reserve_out = self.pool.reserves[token_out]
 
