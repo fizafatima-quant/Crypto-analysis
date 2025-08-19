@@ -1,12 +1,15 @@
+# mev_resistance.py
 from typing import Dict, Optional
+from config import MEV_THRESHOLD, MAX_IMBALANCE_RATIO
 
 def is_sandwich_safe(trade_amount: float,
                      pool_reserves: Dict[str, float],
                      historical_data: Optional[Dict] = None,
-                     threshold: float = 0.005,
+                     threshold: float = MEV_THRESHOLD,
                      test_mode: bool = False) -> bool:
     """
     Enhanced MEV detection.
+    - Uses centralized config parameters
     - Imbalance ratio detection
     - Trade impact analysis
     - Historical spike detection (optional)
@@ -19,17 +22,17 @@ def is_sandwich_safe(trade_amount: float,
     reserve_a, reserve_b = pool_reserves.values()
     min_reserve = min(reserve_a, reserve_b)
 
-    # --- Test mode thresholds ---
+    # --- Test mode thresholds (relaxed) ---
     if test_mode:
         if trade_amount / min_reserve <= 0.01:
-            return True  # Small trades allowed
+            return True   # Small trades allowed
         if trade_amount / min_reserve > 0.1:
             return False  # Large MEV-style trades blocked
         return True
 
     # --- Imbalance ratio detection ---
     imbalance_ratio = max(reserve_a, reserve_b) / min_reserve
-    if imbalance_ratio > 20:
+    if imbalance_ratio > MAX_IMBALANCE_RATIO:
         return False
 
     # --- Trade impact threshold ---
