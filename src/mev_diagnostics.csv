@@ -1,0 +1,4 @@
+tx_hash,block,status,is_mev,node_used,response_time,error
+0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060,46147.0,success,True,https://eth.llamarpc.com,0.16380977630615234,
+0x2a4b6e8c10d3f5b7a9c2e4d6f8a0b1c3d5e7f9a2b4c6e8d0f1a3c5e7b9d2f4a6,,failed,,,,"All nodes failed. Last error: HTTPSConnectionPool(host='eth-rpc.gateway.pokt.network', port=443): Ma"
+0xinvalid123,,failed,,,,Invalid hash format

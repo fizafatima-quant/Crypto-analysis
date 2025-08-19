@@ -1,0 +1,4 @@
+tx_hash,block,status,error,node_used,response_time,price_impact,congestion,threshold,is_mev
+0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060,46147.0,success,,https://eth.llamarpc.com,0.33,0.25,0.5,0.15,True
+0x2a4b6e8c10d3f5b7a9c2e4d6f8a0b1c3d5e7f9a2b4c6e8d0f1a3c5e7b9d2f4a6,,failed,All nodes failed: Unauthorized: You must authenticate your request with an API key. Create an account on https://www.ankr.com/rpc/ and generate your personal API key for free.,,,,,,
+0xinvalid123,,failed,Invalid hash format (must be 66 chars including 0x),,,,,,

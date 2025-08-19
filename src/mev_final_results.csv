@@ -1,0 +1,4 @@
+tx_hash,block,status,is_mev,error,node
+0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060,46147.0,success,True,,https://eth.llamarpc.com
+0x2a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48e1a88ae03ae7f1b5cba1e1e,,failed,,Fetch failed: Transaction not found on blockchain,https://eth.llamarpc.com
+0xinvalid123,,failed,,Fetch failed: Invalid transaction hash format,https://eth.llamarpc.com
