@@ -23,12 +23,18 @@ class LiquidityPool:
         """Proper AMM swap implementation maintaining constant product"""
         if amount_in <= 0:
             raise ValueError("Swap amount must be positive")
-            
-        token_out = 'USDC' if token_in == 'ETH' else 'ETH'
-        new_reserve_in = self.reserves[token_in] + amount_in
-        amount_out = self.reserves[token_out] - (self.k / new_reserve_in)
         
-        # Update reserves
+        token_out = 'USDC' if token_in == 'ETH' else 'ETH'
+        
+        # --- Gas Efficiency Optimization ---
+        # Cache reserves locally instead of multiple dict lookups
+        reserve_in = self.reserves[token_in]
+        reserve_out = self.reserves[token_out]
+        
+        new_reserve_in = reserve_in + amount_in
+        amount_out = reserve_out - (self.k / new_reserve_in)
+        
+        # Update reserves (single write each)
         self.reserves[token_in] = new_reserve_in
         self.reserves[token_out] = self.k / new_reserve_in
         
@@ -47,15 +53,26 @@ class DexBacktester:
         try:
             if amount_in <= 0:
                 raise ValueError("Invalid swap amount")
-                
+            
             token_out = 'USDC' if token_in == 'ETH' else 'ETH'
-            price_before = self.pool.reserves[token_out] / self.pool.reserves[token_in]
+
+            # --- Gas Efficiency Optimization ---
+            # Cache reserves locally (avoid repeating dict lookups)
+            reserve_in = self.pool.reserves[token_in]
+            reserve_out = self.pool.reserves[token_out]
+
+            price_before = reserve_out / reserve_in
             
             if not is_sandwich_safe(amount_in, self.pool.reserves):
                 raise ValueError("MEV risk detected")
-                
+            
             amount_out = self.pool.swap(token_in, amount_in)
-            price_after = self.pool.reserves[token_out] / self.pool.reserves[token_in]
+
+            # Cache reserves again after swap
+            reserve_in_after = self.pool.reserves[token_in]
+            reserve_out_after = self.pool.reserves[token_out]
+
+            price_after = reserve_out_after / reserve_in_after
             
             self.swap_history.append({
                 'token_in': token_in,
@@ -66,7 +83,7 @@ class DexBacktester:
             })
             
             return amount_out, price_after
-            
+        
         except ValueError as e:
             logging.warning(f"Blocked swap: {str(e)}")
             return 0.0, 0.0
