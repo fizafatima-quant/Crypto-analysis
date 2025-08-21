@@ -1,5 +1,5 @@
 import random
-from backtester import DEXBacktester
+from .backtester import DEXBacktester
 
 def test_high_frequency_trading():
     """Test system stability under heavy load"""
