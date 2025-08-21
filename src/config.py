@@ -3,3 +3,6 @@ RISK_PARAMS = {
     'take_profit_pct': 0.10, # 10%
     'max_position_size': 0.2 # 20% of capital
 }
+
+
+SLIPPAGE_TOLERANCE = 0.01  # 1% maximum slippage
