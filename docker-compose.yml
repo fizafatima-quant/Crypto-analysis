@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  dex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mev-resistant-dex:latest
+    container_name: mev-dex
+    working_dir: /app/src
+    environment:
+      - MPLBACKEND=Agg
+    command: python run_dashboard.py
+    # If you want live code from host, uncomment the next 2 lines:
+    # volumes:
+    #   - ./src:/app/src
