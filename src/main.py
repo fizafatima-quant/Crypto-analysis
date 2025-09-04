@@ -1,51 +1,35 @@
-# main.py
 import pandas as pd
-import logging
-from backtester import Backtester
-from strategies import moving_average_crossover
-from reporting import generate_report
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from backtester import DEXBacktester
 
 def main():
+    # Load data
     try:
-        logger.info("Starting backtest...")
-        
-        # 1. Load data
         data = pd.read_csv("data.csv")
-        logger.info(f"Data loaded successfully. Shape: {data.shape}")
-        
-        # 2. Initialize backtester
-        backtester = Backtester(
-            data=data,
-            strategy=moving_average_crossover,
-            stop_loss=0.05,
-            take_profit=0.10
-        )
-        
-        # 3. Run backtest
-        results = backtester.run_backtest()
-        logger.info("Backtest completed successfully")
-        
-        # 4. Generate reports
-        if generate_report(results):
-            logger.info("Reports generated successfully")
-        else:
-            logger.warning("Report generation completed with warnings")
-            
-        # 5. Print summary
-        print("\n=== Backtest Results ===")
-        for k, v in results['metrics'].items():
-            print(f"{k:>20}: {v}")
-            
-    except Exception as e:
-        logger.error(f"Backtest failed: {str(e)}", exc_info=True)
+        print(f"INFO: Data loaded successfully. Shape: {data.shape}")
+    except FileNotFoundError:
+        print("ERROR: data.csv not found in src/ folder.")
         return
+
+    # Initialize backtester (no arguments needed)
+    backtester = DEXBacktester()
+
+    # Provide initial liquidity
+    backtester.provide_liquidity("Alice", "BTC", "USDT", 1000, 30000)
+
+    # Execute swaps from CSV
+    for _, row in data.iterrows():
+        amount_in = row["volume"]
+        try:
+            backtester.safe_swap("Alice", "BTC", "USDT", amount_in)
+        except ValueError as e:
+            print(f"Swap failed: {e}")
+
+    # Print performance report
+    report = backtester.monitor.get_report()
+    print("Performance report:")
+    print(f"Success rate: {report['success_rate']*100:.2f}%")
+    print(f"MEV block rate: {report['mev_block_rate']*100:.2f}%")
+    print(f"Slippage revert rate: {report['slippage_revert_rate']*100:.2f}%")
 
 if __name__ == "__main__":
     main()
