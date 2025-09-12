@@ -1,49 +1,40 @@
-import os
-import sys
+# src/data_fetcher.py
+import yfinance as yf
 import pandas as pd
-import ccxt
+from typing import List
 
-def get_crypto_data(symbol='BTC/USDT', timeframe='1d', limit=100):
-    """Debug version with verbose output"""
-    try:
-        print("\n=== Starting Data Fetch ===")
-        
-        # 1. Verify directory exists
-        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-        os.makedirs(data_dir, exist_ok=True)
-        print(f"[1/4] Data directory verified: {os.path.abspath(data_dir)}")
+class DataFetcher:
+    """
+    Fetch historical & option chain data for a given ticker.
+    """
+    def __init__(self, ticker: str):
+        self.ticker = ticker
+        self.asset = yf.Ticker(ticker)
+    
+    def get_historical_prices(self, period: str = "1y") -> pd.DataFrame:
+        """
+        Fetch historical price data.
+        period: '1y', '6mo', '1mo', etc.
+        """
+        df = self.asset.history(period=period)
+        df.reset_index(inplace=True)
+        return df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+    
+    def get_option_chain(self, expiry: str = None) -> pd.DataFrame:
+        """
+        Fetch options for given expiry. If expiry=None, fetch the nearest expiry.
+        """
+        if expiry is None:
+            expiry = self.asset.options[0]  # nearest expiry
+        chain = self.asset.option_chain(expiry)
+        calls = chain.calls
+        puts = chain.puts
+        calls['type'] = 'call'
+        puts['type'] = 'put'
+        return pd.concat([calls, puts], ignore_index=True)
 
-        # 2. Initialize API connection
-        print("[2/4] Connecting to Binance API...")
-        exchange = ccxt.binance({'timeout': 10000})  # 10 second timeout
-        print("✓ API connected successfully")
-
-        # 3. Fetch data
-        print(f"[3/4] Fetching {limit} {timeframe} candles for {symbol}...")
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-        print(f"✓ Received {len(ohlcv)} data points")
-
-        # 4. Process and save data
-        print("[4/4] Processing data...")
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        
-        filename = os.path.join(data_dir, f'{symbol.replace("/", "-")}_{timeframe}.csv')
-        df.to_csv(filename, index=False)
-        print(f"✓ Data saved to:\n{os.path.abspath(filename)}")
-        print(df.head(3))  # Show sample data
-        
-        return df
-
-    except Exception as e:
-        print(f"\n⚠️ Critical Error ⚠️\n{str(e)}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return None
-
-if __name__ == "__main__":
-    print("\n🚀 Running Crypto Data Fetcher 🚀")
-    data = get_crypto_data()
-    if data is None:
-        print("\n❌ Script failed - see errors above")
-    input("\nPress Enter to exit...")
+    def list_expiries(self) -> list:
+        """
+        List available option expiries
+        """
+        return list(self.asset.options)  # ensure a list is returned

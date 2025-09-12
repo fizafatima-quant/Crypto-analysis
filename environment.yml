@@ -1,0 +1,11 @@
+name: mev-resistant-dex
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - numpy>=1.24
+      - pandas>=2.0
+      - matplotlib>=3.5.0
+      - pytest>=7.0.0

@@ -1,51 +1,82 @@
-# main.py
+# src/main.py
+
+import os
 import pandas as pd
-import logging
-from backtester import Backtester
-from strategies import moving_average_crossover
-from reporting import generate_report
+from backtester import DEXBacktester
+from src.data_fetcher import DataFetcher
+from src.executor import Executor
+from dotenv import load_dotenv
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Load environment variables for paper trading
+load_dotenv()
+TRADE_MODE = os.getenv("TRADE_MODE", "paper")
+executor = Executor(mode=TRADE_MODE)
 
-def main():
+# -------------------------------
+# Paper trading functions
+# -------------------------------
+def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Example strategy:
+    - Buy if price > 5-period MA
+    - Sell if price < 5-period MA
+    """
+    df['MA5'] = df['Close'].rolling(5).mean()
+    df['signal'] = 0
+    df.loc[df['Close'] > df['MA5'], 'signal'] = 1   # Buy
+    df.loc[df['Close'] < df['MA5'], 'signal'] = -1  # Sell
+    return df
+
+def run_paper_trading(ticker: str):
+    fetcher = DataFetcher(ticker)
+    df = fetcher.get_historical_prices(period="1mo")
+    df = generate_signals(df)
+
+    for idx, row in df.iterrows():
+        if row['signal'] == 1:
+            executor.place_order(ticker, "buy", amount=1, price=row['Close'])
+        elif row['signal'] == -1:
+            executor.place_order(ticker, "sell", amount=1, price=row['Close'])
+
+    print(f"Paper trading for {ticker} completed.")
+
+# -------------------------------
+# DEX backtesting functions
+# -------------------------------
+def run_dex_backtest():
+    # Load data from CSV
     try:
-        logger.info("Starting backtest...")
-        
-        # 1. Load data
         data = pd.read_csv("data.csv")
-        logger.info(f"Data loaded successfully. Shape: {data.shape}")
-        
-        # 2. Initialize backtester
-        backtester = Backtester(
-            data=data,
-            strategy=moving_average_crossover,
-            stop_loss=0.05,
-            take_profit=0.10
-        )
-        
-        # 3. Run backtest
-        results = backtester.run_backtest()
-        logger.info("Backtest completed successfully")
-        
-        # 4. Generate reports
-        if generate_report(results):
-            logger.info("Reports generated successfully")
-        else:
-            logger.warning("Report generation completed with warnings")
-            
-        # 5. Print summary
-        print("\n=== Backtest Results ===")
-        for k, v in results['metrics'].items():
-            print(f"{k:>20}: {v}")
-            
-    except Exception as e:
-        logger.error(f"Backtest failed: {str(e)}", exc_info=True)
+        print(f"INFO: Data loaded successfully. Shape: {data.shape}")
+    except FileNotFoundError:
+        print("ERROR: data.csv not found in src/ folder.")
         return
 
+    # Initialize backtester
+    backtester = DEXBacktester()
+
+    # Provide initial liquidity
+    backtester.provide_liquidity("Alice", "BTC", "USDT", 1000, 30000)
+
+    # Execute swaps from CSV
+    for _, row in data.iterrows():
+        amount_in = row["volume"]
+        try:
+            backtester.safe_swap("Alice", "BTC", "USDT", amount_in)
+        except ValueError as e:
+            print(f"Swap failed: {e}")
+
+    # Print performance report
+    report = backtester.monitor.get_report()
+    print("Performance report:")
+    print(f"Success rate: {report['success_rate']*100:.2f}%")
+    print(f"MEV block rate: {report['mev_block_rate']*100:.2f}%")
+    print(f"Slippage revert rate: {report['slippage_revert_rate']*100:.2f}%")
+
+# -------------------------------
+# Main entry
+# -------------------------------
 if __name__ == "__main__":
-    main()
+    # Run both systems independently
+    run_paper_trading("AAPL")
+    run_dex_backtest()
