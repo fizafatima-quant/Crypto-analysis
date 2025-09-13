@@ -1,125 +1,114 @@
 # src/trading_assistant.py
-from src.data_fetcher import DataFetcher
-import pandas as pd
-import numpy as np
-import ta
+
+import json
 import os
+import pandas as pd
+from src.data_fetcher import DataFetcher
 from dotenv import load_dotenv
-from datetime import datetime
-import matplotlib.pyplot as plt
 
-# -----------------------------
-# Config
-# -----------------------------
+# Load environment variables (for future Telegram alerts)
 load_dotenv()
-TICKERS = os.getenv("TICKERS", "BTC-USD,ETH-USD,SOL-USD").split(",")
-OUTPUT_CSV = os.getenv("OUTPUT_CSV", "crypto_trading_signals.csv")
-PLOT_DIR = os.getenv("PLOT_DIR", "crypto_plots")
-os.makedirs(PLOT_DIR, exist_ok=True)
 
-# -----------------------------
-# Indicator & Signal Functions
-# -----------------------------
-def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    df['MA5'] = df['Close'].rolling(5).mean()
-    df['MA20'] = df['Close'].rolling(20).mean()
-    df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
-    macd = ta.trend.MACD(df['Close'])
-    df['MACD'] = macd.macd()
-    df['MACD_signal'] = macd.macd_signal()
-    df['Return'] = df['Close'].pct_change()
-    df['Volatility'] = df['Return'].rolling(20).std() * np.sqrt(252)
-    return df
+# ----------------------------
+# Portfolio functions
+# ----------------------------
+def load_portfolio(filename="src/portfolio.json"):
+    """Load portfolio entry prices from JSON"""
+    try:
+        with open(filename, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("⚠️ portfolio.json not found. Using empty portfolio.")
+        return {}
 
-def generate_signal(df: pd.DataFrame) -> dict:
-    latest = df.iloc[-1]
-    score = 0
-    if latest['MA5'] > latest['MA20']:
-        score += 1
-    elif latest['MA5'] < latest['MA20']:
-        score -= 1
-    if latest['RSI'] < 30:
-        score += 1
-    elif latest['RSI'] > 70:
-        score -= 1
-    if latest['MACD'] > latest['MACD_signal']:
-        score += 1
-    elif latest['MACD'] < latest['MACD_signal']:
-        score -= 1
-    signal = 1 if score > 0 else (-1 if score < 0 else 0)
-    confidence = abs(score) / 3
-    return {"signal": signal, "confidence": confidence}
+def calculate_profit(current_price, entry_price):
+    """Calculate profit percentage"""
+    if entry_price is None:
+        return None
+    return ((current_price - entry_price) / entry_price) * 100
 
-# -----------------------------
-# Analysis & Dashboard
-# -----------------------------
-def analyze_ticker(ticker: str) -> dict:
-    fetcher = DataFetcher(ticker)
-    df = fetcher.get_historical_prices(period="3mo")
-    df = calculate_indicators(df)
-    sig_info = generate_signal(df)
-    latest = df.iloc[-1]
-    trend_strength = (latest['MA5'] - latest['MA20']) / latest['MA20'] * 100
-
-    result = {
-        "Ticker": ticker,
-        "Date": latest['Date'],
-        "Price": latest['Close'],
-        "MA5": latest['MA5'],
-        "MA20": latest['MA20'],
-        "RSI": latest['RSI'],
-        "MACD": latest['MACD'],
-        "MACD_signal": latest['MACD_signal'],
-        "Volatility": latest['Volatility'],
-        "Signal": "BUY" if sig_info['signal'] == 1 else ("SELL" if sig_info['signal'] == -1 else "HOLD"),
-        "Confidence": sig_info['confidence'],
-        "Trend_strength_%": trend_strength
-    }
-
-    print(f"\n--- {ticker} Analysis ---")
-    for k, v in result.items():
-        if k != "Date":
-            if isinstance(v, float):
-                print(f"{k}: {v:.2f}")
+def adjust_signal(signal, profit_pct):
+    """Adjust SELL signal according to profit rules"""
+    if signal == "SELL ❌":
+        if profit_pct is not None:
+            if profit_pct >= 50:
+                return "TAKE PROFIT 💰 (≥50%)"
+            elif profit_pct < 0:
+                return "HOLD ⏸️ (Avoid selling at loss)"
             else:
-                print(f"{k}: {v}")
+                return "HOLD ⏸️ (Waiting for profit target)"
+    return signal
+
+# ----------------------------
+# Indicator calculation
+# ----------------------------
+def calculate_indicators(df: pd.DataFrame) -> dict:
+    """Calculate simple indicators: MA5, MA20, RSI, MACD"""
+    # Moving averages
+    df["MA5"] = df["Close"].rolling(5).mean()
+    df["MA20"] = df["Close"].rolling(20).mean()
+    
+    # Simple RSI calculation
+    delta = df["Close"].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = -delta.clip(upper=0).rolling(14).mean()
+    rs = gain / loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+    
+    # Simple MACD
+    ema12 = df["Close"].ewm(span=12, adjust=False).mean()
+    ema26 = df["Close"].ewm(span=26, adjust=False).mean()
+    df["MACD"] = ema12 - ema26
+    df["MACD_signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+    
+    # Signal logic: simple example
+    signal = "HOLD ⏸️"
+    if df["Close"].iloc[-1] > df["MA5"].iloc[-1]:
+        signal = "BUY ✅"
+    elif df["Close"].iloc[-1] < df["MA5"].iloc[-1]:
+        signal = "SELL ❌"
+    
+    return {"signal": signal, "MA5": df["MA5"].iloc[-1], "MA20": df["MA20"].iloc[-1],
+            "RSI": df["RSI"].iloc[-1], "MACD": df["MACD"].iloc[-1], "MACD_signal": df["MACD_signal"].iloc[-1]}
+
+# ----------------------------
+# Coin analysis
+# ----------------------------
+def analyze_coin(symbol, data, entry_price=None):
+    current_price = data["Close"].iloc[-1]
+
+    # Calculate profit %
+    profit_pct = calculate_profit(current_price, entry_price)
+
+    # Compute indicators
+    indicators = calculate_indicators(data)
+    signal = adjust_signal(indicators["signal"], profit_pct)
+
+    # Print analysis
+    print(f"\n--- {symbol} Analysis ---")
+    print(f"Current Price: {current_price:.2f}")
+    if entry_price:
+        print(f"Entry Price: {entry_price:.2f}")
+        print(f"Profit: {profit_pct:+.2f}%")
+    print(f"MA5: {indicators['MA5']:.2f}, MA20: {indicators['MA20']:.2f}")
+    print(f"RSI: {indicators['RSI']:.2f}")
+    print(f"MACD: {indicators['MACD']:.2f}, MACD_signal: {indicators['MACD_signal']:.2f}")
+    print(f"Signal: {signal}")
     print("-------------------------")
 
-    # Plot price & MAs
-    plt.figure(figsize=(12,5))
-    plt.plot(df['Date'], df['Close'], label='Close', color='blue')
-    plt.plot(df['Date'], df['MA5'], label='MA5', color='green')
-    plt.plot(df['Date'], df['MA20'], label='MA20', color='red')
-    plt.title(f"{ticker} Price & Moving Averages")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(PLOT_DIR, f"{ticker}_price_ma.png"))
-    plt.close()
-
-    # Plot RSI
-    plt.figure(figsize=(12,3))
-    plt.plot(df['Date'], df['RSI'], label='RSI', color='purple')
-    plt.axhline(70, color='red', linestyle='--')
-    plt.axhline(30, color='green', linestyle='--')
-    plt.title(f"{ticker} RSI")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(PLOT_DIR, f"{ticker}_RSI.png"))
-    plt.close()
-
-    return result
-
-# -----------------------------
-# Main execution
-# -----------------------------
+# ----------------------------
+# Main function
+# ----------------------------
 if __name__ == "__main__":
-    dashboard = []
-    for t in TICKERS:
-        dashboard.append(analyze_ticker(t.strip()))
+    # Load portfolio
+    portfolio = load_portfolio()
 
-    df_dashboard = pd.DataFrame(dashboard)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_file = OUTPUT_CSV.replace(".csv", f"_{timestamp}.csv")
-    df_dashboard.to_csv(output_file, index=False)
-    print(f"\n✅ Crypto trading dashboard saved to: {output_file}")
-    print(f"📊 Plots saved in folder: {PLOT_DIR}")
+    # List of coins
+    symbols = ["BTC-USD", "ETH-USD", "MANA-USD", "ONDO-USD", "IP-USD"]
+
+    # Analyze each coin
+    for symbol in symbols:
+        fetcher = DataFetcher(symbol)  # ✅ pass ticker here
+        data = fetcher.get_historical_prices(period="1mo")
+        entry_price = portfolio.get(symbol.split("-")[0], {}).get("entry_price")
+        analyze_coin(symbol, data, entry_price)
