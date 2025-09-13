@@ -1,0 +1,7 @@
+{
+  "BTC": {"entry_price": 25000},
+  "ETH": {"entry_price": 1700},
+  "MANA": {"entry_price": 0.45},
+  "ONDO": {"entry_price": 0.85},
+  "IP": {"entry_price": 1.20}
+}

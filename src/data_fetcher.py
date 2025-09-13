@@ -1,49 +1,46 @@
-import os
-import sys
 import pandas as pd
-import ccxt
+from pycoingecko import CoinGeckoAPI
 
-def get_crypto_data(symbol='BTC/USDT', timeframe='1d', limit=100):
-    """Debug version with verbose output"""
-    try:
-        print("\n=== Starting Data Fetch ===")
-        
-        # 1. Verify directory exists
-        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-        os.makedirs(data_dir, exist_ok=True)
-        print(f"[1/4] Data directory verified: {os.path.abspath(data_dir)}")
+# Mapping of coin symbols to CoinGecko IDs
+COIN_MAPPING = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "ONDO": "ondo",
+    "MANA": "decentraland",
+    "IP": "illuvium",
+    "ILLUVIUM": "illuvium",
+    "DECENTRALAND": "decentraland"
+}
 
-        # 2. Initialize API connection
-        print("[2/4] Connecting to Binance API...")
-        exchange = ccxt.binance({'timeout': 10000})  # 10 second timeout
-        print("✓ API connected successfully")
+class DataFetcher:
+    def __init__(self, symbol):
+        self.symbol = symbol.upper()
+        if self.symbol not in COIN_MAPPING:
+            raise ValueError(f"Coin ID not found for symbol: {self.symbol}")
+        self.coin_id = COIN_MAPPING[self.symbol]
+        self.cg = CoinGeckoAPI()
 
-        # 3. Fetch data
-        print(f"[3/4] Fetching {limit} {timeframe} candles for {symbol}...")
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-        print(f"✓ Received {len(ohlcv)} data points")
+    def get_historical_prices(self, days=30):
+        """
+        Fetch historical market data for the coin.
+        Returns a pandas DataFrame with 'Date' and 'Close' columns.
+        """
+        try:
+            data = self.cg.get_coin_market_chart_by_id(
+                id=self.coin_id,
+                vs_currency='usd',
+                days=days
+            )
+            if "prices" not in data:
+                return pd.DataFrame()
 
-        # 4. Process and save data
-        print("[4/4] Processing data...")
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        
-        filename = os.path.join(data_dir, f'{symbol.replace("/", "-")}_{timeframe}.csv')
-        df.to_csv(filename, index=False)
-        print(f"✓ Data saved to:\n{os.path.abspath(filename)}")
-        print(df.head(3))  # Show sample data
-        
-        return df
-
-    except Exception as e:
-        print(f"\n⚠️ Critical Error ⚠️\n{str(e)}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return None
-
-if __name__ == "__main__":
-    print("\n🚀 Running Crypto Data Fetcher 🚀")
-    data = get_crypto_data()
-    if data is None:
-        print("\n❌ Script failed - see errors above")
-    input("\nPress Enter to exit...")
+            # Convert to DataFrame
+            df = pd.DataFrame(data["prices"], columns=["timestamp", "Close"])
+            df["Date"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df.set_index("Date", inplace=True)
+            df.drop("timestamp", axis=1, inplace=True)
+            return df
+        except Exception as e:
+            print(f"Error fetching data for {self.symbol}: {e}")
+            return pd.DataFrame()
