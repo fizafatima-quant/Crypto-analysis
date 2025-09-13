@@ -1,98 +1,101 @@
-import os
 import time
-import pandas as pd
+import os
 from dotenv import load_dotenv
-from .data_fetcher import DataFetcher  # Make sure this file is in src/
 import telebot
+from .data_fetcher import DataFetcher 
 
-# Load environment variables
+# Load environment variables from .env
 load_dotenv()
-
-# Telegram setup
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_IDS = [cid.strip() for cid in os.getenv("TELEGRAM_CHAT_IDS", "").split(",")]
+TELEGRAM_CHAT_IDS = [
+    os.getenv("TELEGRAM_CHAT_ID_ME"),
+    os.getenv("TELEGRAM_CHAT_ID_FRIEND")
+]
 
-if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
-    raise ValueError("Telegram token or chat IDs not set in .env!")
+if TELEGRAM_BOT_TOKEN is None:
+    raise ValueError("TELEGRAM_BOT_TOKEN is not set! Check your .env file.")
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Trading setup
-TICKERS = os.getenv("TICKERS", "BTC,ETH,SOL").split(",")
-ENTRY_PRICES = {ticker.upper(): None for ticker in TICKERS}  # Set manually if bought
-UPDATE_INTERVAL = 600  # seconds
+# Coin symbols
+COINS = ["BTC", "ETH", "SOL", "ONDO", "MANA", "IP"]
 
-def generate_signals(df):
-    df['MA5'] = df['Close'].rolling(5).mean()
-    df['MA20'] = df['Close'].rolling(20).mean()
-    df['signal'] = ""
-    df.loc[df['Close'] > df['MA5'], 'signal'] = "BUY"
-    df.loc[df['Close'] < df['MA5'], 'signal'] = "SELL"
-    return df
+# Dictionary to store entry prices
+entry_prices = {}
 
-def analyze_coin(ticker):
-    fetcher = DataFetcher(ticker)
-    df = fetcher.get_historical_prices()  # returns a DataFrame with 'Close'
-    if df.empty:
-        print(f"No price data found for {ticker}")
-        return
-
-    df = generate_signals(df)
-    current_price = df['Close'].iloc[-1]
-    ma5 = df['MA5'].iloc[-1]
-    ma20 = df['MA20'].iloc[-1]
-
-    # Trend strength
-    trend_strength = round(((ma5 - ma20)/ma20)*100, 2) if ma20 != 0 else 0
-
-    # Profit/loss percentage
-    entry_price = ENTRY_PRICES.get(ticker)
-    profit_pct = round(((current_price - entry_price)/entry_price)*100, 2) if entry_price else 0
-
-    # Print analysis
-    print(f"--- {ticker} Analysis ---")
-    print(f"Current Price: {current_price:.4f}")
-    print(f"MA5: {ma5:.4f}, MA20: {ma20:.4f}")
-    print(f"Signal: {df['signal'].iloc[-1]} {'✅' if df['signal'].iloc[-1]=='BUY' else '❌'}")
-    print(f"Trend strength: {trend_strength}%")
-    if entry_price:
-        print(f"Profit/Loss: {profit_pct}%")
-    print("-------------------------")
-
-    # Send Telegram alerts
-    msg = f"{ticker} | Price: {current_price:.4f} | Signal: {df['signal'].iloc[-1]} | Trend: {trend_strength}%"
-    if entry_price:
-        msg += f" | Profit/Loss: {profit_pct}%"
-        if profit_pct >= 50:
-            msg += " 🚀 +50% Profit!"
-        elif profit_pct <= -20:
-            msg += " ⚠️ -20% Loss!"
-
+# Function to send Telegram messages to all chat IDs
+def send_telegram(msg):
     for chat_id in TELEGRAM_CHAT_IDS:
-        try:
-            bot.send_message(chat_id, msg)
-        except Exception as e:
-            print(f"Failed to send alert to {chat_id}: {e}")
-
-def run_trading_assistant():
-    print("Starting Trading Assistant...")
-    # Ask user to enter/update entry prices
-    for ticker in TICKERS:
-        user_input = input(f"Update entry price? Enter {ticker} price or press Enter to skip: ")
-        if user_input:
+        if chat_id:
             try:
-                ENTRY_PRICES[ticker] = float(user_input)
-            except ValueError:
-                print(f"Invalid price entered for {ticker}, skipping.")
+                bot.send_message(chat_id=chat_id, text=msg)
+            except Exception as e:
+                print(f"Telegram send failed: {e}")
+
+# Function to calculate profit/loss percentage
+def calculate_profit(current_price, entry_price):
+    if entry_price is None:
+        return 0.0
+    return ((current_price - entry_price) / entry_price) * 100
+
+# Analyze single coin
+def analyze_coin(symbol):
+    try:
+        fetcher = DataFetcher(symbol)
+        df = fetcher.get_historical_prices()  # should return a DataFrame with 'Close'
+
+        if df.empty or 'Close' not in df.columns:
+            print(f"No price data found for {symbol}")
+            return
+
+        current_price = df['Close'].iloc[-1]
+        ma5 = df['Close'].rolling(window=5).mean().iloc[-1]
+        ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
+
+        signal = "BUY ✅" if current_price > ma5 else "SELL ❌"
+
+        entry_price = entry_prices.get(symbol)
+        profit = calculate_profit(current_price, entry_price)
+
+        # Print analysis
+        print(f"--- {symbol} Analysis ---")
+        print(f"Current Price: {current_price:.4f}")
+        print(f"MA5: {ma5:.4f}, MA20: {ma20:.4f}")
+        print(f"Signal: {signal}")
+        print(f"Profit: {profit:.2f}%")
+        print("-------------------------")
+
+        # Telegram alert
+        msg = f"{symbol} | Price: {current_price:.4f} | Signal: {signal} | Profit: {profit:.2f}%"
+        send_telegram(msg)
+
+        # Loss alert at -20%
+        if profit <= -20:
+            send_telegram(f"⚠️ ALERT! {symbol} has fallen -20% or more! Current Profit: {profit:.2f}%")
+
+    except Exception as e:
+        print(f"Error analyzing {symbol}: {e}")
+
+# Main loop
+def run_trading_assistant(update_interval=600):
+    print("Starting Trading Assistant...")
+
+    # Ask for entry prices once
+    for coin in COINS:
+        try:
+            price_input = input(f"Enter {coin} entry price or press Enter to skip: ").strip()
+            if price_input:
+                entry_prices[coin] = float(price_input)
+            else:
+                entry_prices[coin] = None
+        except ValueError:
+            entry_prices[coin] = None
 
     while True:
-        for ticker in TICKERS:
-            try:
-                analyze_coin(ticker)
-            except Exception as e:
-                print(f"Error analyzing {ticker}: {e}")
-        print(f"Waiting {UPDATE_INTERVAL/60} minutes before next update...\n")
-        time.sleep(UPDATE_INTERVAL)
+        for coin in COINS:
+            analyze_coin(coin)
+        print(f"Waiting {update_interval/60:.1f} minutes before next update...\n")
+        time.sleep(update_interval)
 
 if __name__ == "__main__":
     run_trading_assistant()
