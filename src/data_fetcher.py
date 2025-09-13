@@ -1,40 +1,37 @@
-# src/data_fetcher.py
-import yfinance as yf
 import pandas as pd
-from typing import List
+from pycoingecko import CoinGeckoAPI
 
 class DataFetcher:
-    """
-    Fetch historical & option chain data for a given ticker.
-    """
-    def __init__(self, ticker: str):
-        self.ticker = ticker
-        self.asset = yf.Ticker(ticker)
-    
-    def get_historical_prices(self, period: str = "1y") -> pd.DataFrame:
-        """
-        Fetch historical price data.
-        period: '1y', '6mo', '1mo', etc.
-        """
-        df = self.asset.history(period=period)
-        df.reset_index(inplace=True)
-        return df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
-    
-    def get_option_chain(self, expiry: str = None) -> pd.DataFrame:
-        """
-        Fetch options for given expiry. If expiry=None, fetch the nearest expiry.
-        """
-        if expiry is None:
-            expiry = self.asset.options[0]  # nearest expiry
-        chain = self.asset.option_chain(expiry)
-        calls = chain.calls
-        puts = chain.puts
-        calls['type'] = 'call'
-        puts['type'] = 'put'
-        return pd.concat([calls, puts], ignore_index=True)
+    # Map ticker symbols to CoinGecko IDs
+    COIN_ID_MAP = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "SOL": "solana",
+        "ONDO": "ondo",
+        "MANA": "decentraland",
+        "IP": "illuvium"
+    }
 
-    def list_expiries(self) -> list:
-        """
-        List available option expiries
-        """
-        return list(self.asset.options)  # ensure a list is returned
+    def __init__(self, symbol):
+        self.symbol = symbol.upper()
+        self.cg = CoinGeckoAPI()
+        self.coin_id = self.COIN_ID_MAP.get(self.symbol)
+        if not self.coin_id:
+            raise ValueError(f"Coin ID not found for symbol: {self.symbol}")
+
+    def get_historical_prices(self, days=30):
+        """Fetches historical market data for the coin for the last `days` days."""
+        try:
+            data = self.cg.get_coin_market_chart_by_id(
+                id=self.coin_id,
+                vs_currency='usd',
+                days=days
+            )
+            prices = data['prices']  # list of [timestamp, price]
+            df = pd.DataFrame(prices, columns=['time', 'Close'])
+            df['time'] = pd.to_datetime(df['time'], unit='ms')
+            df.set_index('time', inplace=True)
+            return df
+        except Exception as e:
+            print(f"Error fetching data for {self.symbol}: {e}")
+            return pd.DataFrame()  # return empty DataFrame on error
