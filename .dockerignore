@@ -1,0 +1,6 @@
+.git
+__pycache__/
+.pytest_cache/
+*.png
+*.csv
+*.egg-info/
