@@ -1,0 +1,3 @@
+self.monitor = PerformanceMonitor()
+self.mev_adjuster = AdaptiveMEVThreshold(initial_threshold=0.01)  # 1% initial threshold
+self.swap_history = []
